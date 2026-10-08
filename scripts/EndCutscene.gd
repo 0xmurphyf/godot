@@ -55,8 +55,13 @@ var _won: bool = false
 var _ended: bool = false
 var _video: Control = null
 var _overlay: Control = null
+var _warn: Label = null
 var _has_video: bool = false
 var _len: float = 0.0
+# 运行时真实渲染驱动（来自 RenderingServer.get_current_rendering_driver_name()），
+# 以及它是否支持视频呈现（Compatibility/OpenGL 不支持）。
+var _render_driver: String = "unknown"
+var _render_ok: bool = false
 
 
 func _ready() -> void:
@@ -77,7 +82,35 @@ func _ready() -> void:
 ## 视频会盖住本节点 _draw() 出来的东西，框架/进度条得画在更上层。
 func _build_video() -> void:
 	if not ClassDB.class_exists("VideoStreamPlayer"):
+		# Renderer 不支持（例如仍在 gl_compatibility）时这个类不会注册，
+		# 只能走 DUMMY。重启编辑器切到 Forward+/Mobile 后即可出现。
+		print("[EndCutscene] VideoStreamPlayer 未注册 —— 当前渲染后端不支持视频，将只用 DUMMY。请重启 Godot 并确认 renderer 为 forward_plus/mobile。")
 		return
+	# 运行时诊断：拿到**真实**渲染驱动名（不是配置文件里写的值）。
+	# 因为 Vulkan/D3D12 初始化失败时 Godot 会**自动回退**到 opengl3，
+	# 此时 VideoStreamPlayer 与 Native Video 都不会输出画面（黑屏）。
+	# 正确 API（Godot 4.x，commit 4a70ac2，2024-10-02 加入）：
+	#   RenderingServer.get_current_rendering_driver_name()
+	#   返回 vulkan / d3d12 / metal / opengl3 / opengl3_es / opengl3_angle
+	var rmethod: String = ProjectSettings.get_setting("rendering/renderer/rendering_method", "forward_plus")
+	var drv: String = "unknown"
+	if RenderingServer.has_method("get_current_rendering_driver_name"):
+		drv = str(RenderingServer.call("get_current_rendering_driver_name"))
+	elif RenderingServer.has_method("get_current_rendering_method"):
+		# 老版本兜底：返回 forward_plus / mobile / gl_compatibility
+		drv = str(RenderingServer.call("get_current_rendering_method"))
+	# 关键：直接确认 Native Video 扩展是否真的加载了（加载了才有 .mp4 导入器）
+	var nv_loaded: bool = ClassDB.class_exists("NativeVideoStream")
+	print("[EndCutscene] 渲染驱动=", drv, "  配置渲染方法=", rmethod,
+		"  NativeVideoStream=", nv_loaded,
+		"  VideoStreamPlayer=", ClassDB.class_exists("VideoStreamPlayer"))
+	var unsupported: bool = drv.begins_with("opengl") or rmethod == "gl_compatibility"
+	if unsupported:
+		print("[EndCutscene] ⚠ 运行时后端是 Compatibility/OpenGL（视频不渲染 → 黑屏）。请用「Godot.exe --rendering-driver d3d12」（或 vulkan）启动，或在导出预设里把渲染方法锁成 Forward+。")
+	else:
+		print("[EndCutscene] ✓ 后端为 ", drv, "，视频应当能渲染；若仍黑屏，请在 Output 面板找 native_video 的报错。")
+	_render_driver = drv
+	_render_ok = not unsupported
 	# ClassDB.instantiate() 返回 Object，必须 as Control 才能赋给 Control 变量
 	_video = ClassDB.instantiate("VideoStreamPlayer") as Control
 	_video.name = "Video"
@@ -96,6 +129,18 @@ func _build_video() -> void:
 	add_child(_overlay)
 	_overlay.draw.connect(Callable(self, "_draw_overlay"))
 
+	# 视频已加载但渲染后端不支持时，屏幕上弹个明确提示（否则用户只看得到日志，
+	# 画面却什么都没有）。Label 用的是 Godot 内置兜底字体，不依赖外部美术资源。
+	_warn = Label.new()
+	_warn.name = "Warn"
+	_warn.set_anchors_preset(Control.PRESET_CENTER)
+	_warn.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_warn.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_warn.visible = false
+	_warn.add_theme_color_override("font_color", accent)
+	_warn.text = "VIDEO DISABLED\n渲染后端为 Compatibility/OpenGL\nNative Video 需要 d3d12 / vulkan\n请用 Godot --rendering-driver d3d12 启动"
+	add_child(_warn)
+
 
 ## 按胜负找视频文件，依次试 .mp4 / .ogv / .webm，返回第一个存在的。
 ## 都没有就返回 ""（走 DUMMY）。
@@ -104,6 +149,8 @@ func _find_video(win: bool) -> String:
 	var dir: String = video_dir
 	if not dir.ends_with("/"):
 		dir += "/"
+	# 本项目用 Native Video 扩展做硬件解码，直接播 .mp4（H.264）。
+	# 核心 Godot 4 在本机无 Ogg Theora 导入器（.ogv 不可用），故 .mp4 优先。
 	var p: String = dir + base + EXT_MP4
 	if ResourceLoader.exists(p):
 		return p
@@ -160,15 +207,26 @@ func play(win: bool) -> void:
 			_video.set("stream", res)
 			if res.has_method("get_length"):
 				var l: float = res.get_length()
-				if l > 0.1:
+				# 只采信合理时长（>1s）。Native Video 在开局尚未探测完时可能返回
+				# 极小值，直接采信会让过场在闪一下后就结束。
+				if l > 1.0:
 					_len = l          # 用视频真实时长，进度条才准
 			_has_video = true
+			print("[EndCutscene] 视频已加载：", path, "  时长=", _len, "  time_scale=", Engine.time_scale)
+		else:
+			# 文件被找到但 load 失败 —— 几乎总是 .ogv 还没被 Godot 导入（缺 .import）。
+			print("[EndCutscene] 找到视频文件但 load() 返回 null（多半是 .ogv 尚未导入，请在 Godot 里重新打开项目触发导入）：", path)
+	else:
+		print("[EndCutscene] 未找到视频文件，播放 DUMMY。path=", path, "  _video=", _video)
 
 	if _has_video:
 		_video.call("set_anchors_preset", Control.PRESET_FULL_RECT)
 		_video.set("expand", true)
 		_video.set("volume_db", video_volume_db)
 		_video.call("play")
+		# 视频加载成功但后端不支持呈现 → 屏幕上直接弹提示，免得只看得到日志。
+		if _warn != null:
+			_warn.visible = not _render_ok
 	else:
 		queue_redraw()
 
@@ -179,8 +237,12 @@ func play(win: bool) -> void:
 ## 视频自己播完也算结束。
 ## 注意：跳过时视频的 finished **不会**触发，
 ## 所以 _finish() 里必须手动 stop() —— 否则视频还在后台放着声音。
+## 另外：Native Video 偶尔会在开局瞬间误发一次 finished（还没真正开播就报「结束」），
+## 直接采信会让过场「闪一下就消失」。因此忽略过早的结束信号，
+## 真正的结束交给 _process 计时器（_t >= _len）；仅当已播放过半才接受 finished。
 func _on_video_finished() -> void:
-	if _playing and not _ended:
+	print("[EndCutscene] 收到 finished：_t=", snappedf(_t, 0.01), "  _len=", _len, "  playing=", _playing, "  ended=", _ended)
+	if _playing and not _ended and _t >= _len * 0.5:
 		_finish(false)
 
 
@@ -189,6 +251,7 @@ func _finish(by_skip: bool) -> void:
 		return
 	_ended = true
 	_playing = false
+	print("[EndCutscene] _finish 触发：by_skip=", by_skip, "  _t=", snappedf(_t, 0.01), "  _len=", _len)
 	if _video != null and bool(_video.call("is_playing")):
 		_video.call("stop")
 	var tw: Tween = create_tween()
@@ -222,12 +285,13 @@ func _16x9_frame(s: Vector2) -> Rect2:
 ## 这一层只画「视频画面之下的东西」：底色和 DUMMY。
 ## 框架 / 进度条 / SKIP 画在 _overlay 上（见 _draw_overlay）。
 func _draw() -> void:
+	# 永远先铺底色：视频渲染不出来时至少是个纯色背景，而不是透出底层游戏。
+	draw_rect(Rect2(Vector2.ZERO, size), bg_color)
 	if _has_video:
 		return                    # 视频自己有画面，铺底色反而挡住它
 	var s: Vector2 = size
 	var frame: Rect2 = _16x9_frame(s)
 	var col: Color = neon if _won else accent
-	draw_rect(Rect2(Vector2.ZERO, s), bg_color)
 	_draw_dummy(frame, col)
 
 
