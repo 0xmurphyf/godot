@@ -3,6 +3,8 @@
 
 # Export builds (regenerable)
 /build/
+123/
+123.zip
 
 # Agent / WorkBuddy workspace data
 .workbuddy/
