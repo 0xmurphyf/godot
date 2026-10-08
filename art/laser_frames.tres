@@ -1,0 +1,20 @@
+[gd_resource type="SpriteFrames" format=3 load_steps=11]
+
+[ext_resource type="Texture2D" path="res://art/laser/laser_0.png" id="t_0"]
+[ext_resource type="Texture2D" path="res://art/laser/laser_1.png" id="t_1"]
+[ext_resource type="Texture2D" path="res://art/laser/laser_2.png" id="t_2"]
+[ext_resource type="Texture2D" path="res://art/laser/laser_3.png" id="t_3"]
+[ext_resource type="Texture2D" path="res://art/laser/laser_4.png" id="t_4"]
+[ext_resource type="Texture2D" path="res://art/laser/laser_5.png" id="t_5"]
+[ext_resource type="Texture2D" path="res://art/laser/laser_6.png" id="t_6"]
+[ext_resource type="Texture2D" path="res://art/laser/laser_7.png" id="t_7"]
+[ext_resource type="Texture2D" path="res://art/laser/laser_8.png" id="t_8"]
+[ext_resource type="Texture2D" path="res://art/laser/laser_9.png" id="t_9"]
+
+[resource]
+animations = [{
+"loop": false,
+"name": &"beam",
+"speed": 12.0,
+"frames": [{"duration": 0.5, "texture": ExtResource("t_0")}, {"duration": 0.5, "texture": ExtResource("t_1")}, {"duration": 0.5, "texture": ExtResource("t_2")}, {"duration": 0.5, "texture": ExtResource("t_3")}, {"duration": 1.0, "texture": ExtResource("t_4")}, {"duration": 1.0, "texture": ExtResource("t_5")}, {"duration": 1.0, "texture": ExtResource("t_6")}, {"duration": 1.25, "texture": ExtResource("t_7")}, {"duration": 1.25, "texture": ExtResource("t_8")}, {"duration": 1.25, "texture": ExtResource("t_9")}]
+}]

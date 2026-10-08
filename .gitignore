@@ -1,0 +1,16 @@
+# Godot 4.x
+.godot/
+
+# Export builds (regenerable)
+/build/
+
+# Agent / WorkBuddy workspace data
+.workbuddy/
+
+# OS cruft
+.DS_Store
+Thumbs.db
+*.tmp
+
+# Godot editor temp
+.godot/editor/
